@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+@theme {
+  --color-charcoal: #121212;
+  --color-night: #1a1a1a;
+  --color-slate: #222222;
+  --color-brass: #c5a059;
+  --color-burgundy: #5c162e;
+  --color-parchment: #e8e3d7;
+  --color-faded: #8b8b8b;
+  --font-display: "Playfair Display", "Merriweather", Georgia, serif;
+  --font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  background: #121212;
+  color: #e8e3d7;
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(92, 22, 46, 0.12), transparent 280px),
+    #121212;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: rgba(197, 160, 89, 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #121212;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333333;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #444444;
+}
+
+.book-cover {
+  box-shadow: inset 0 0 0 1px rgba(232, 227, 215, 0.08);
+}
+
+.book-detail-cover,
+.group {
+  box-shadow: inset 0 0 0 1px rgba(232, 227, 215, 0.06);
+}
+
+.fit-title {
+  display: -webkit-box;
+  max-height: 7.5rem;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  font-size: clamp(1.05rem, 1.8vw, 1.65rem);
+  line-height: 1.08;
+}
+
+.fit-author,
+.line-fit-small {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+}
+
+.fit-author {
+  -webkit-line-clamp: 2;
+  font-size: clamp(0.78rem, 1vw, 0.95rem);
+  line-height: 1.25;
+}
+
+.line-fit-small {
+  -webkit-line-clamp: 3;
+  font-size: clamp(0.9rem, 1.2vw, 1.1rem);
+  line-height: 1.1;
+}
+
+.milestone-glow {
+  animation: milestone-pulse 900ms ease-out;
+}
+
+@keyframes milestone-pulse {
+  0% {
+    transform: translateY(-4px);
+    box-shadow: 0 0 0 rgba(197, 160, 89, 0);
+  }
+
+  55% {
+    transform: translateY(0);
+    box-shadow: 0 0 28px rgba(197, 160, 89, 0.18);
+  }
+
+  100% {
+    box-shadow: 0 0 0 rgba(197, 160, 89, 0);
+  }
+}
