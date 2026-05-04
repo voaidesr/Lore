@@ -25,9 +25,30 @@ npm install
 npm run tauri dev
 ```
 
+## Build and Install on Fedora
+
+Build the optimized desktop package:
+
+```bash
+npm run tauri build
+```
+
+Install it into your system apps:
+
+```bash
+sudo dnf install ./src-tauri/target/release/bundle/rpm/Lore-0.1.0-1.x86_64.rpm
+```
+
+After installation, launch `Lore` from your desktop app menu. To remove it:
+
+```bash
+sudo dnf remove lore
+```
+
 ## Project Shape
 
 - `src/`: React frontend.
 - `src-tauri/`: Rust/Tauri desktop shell.
 - Local data is stored as `library.json` in Tauri's app data directory.
 - Pages: Home dashboard, Library shelves, and per-book analytics.
+- App icon source: `src/assets/lore-icon.svg`.

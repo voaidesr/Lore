@@ -29,6 +29,7 @@ import {
 type Page = "home" | "library" | "book";
 type TargetKind = ReadingTarget["kind"];
 type ChartPeriod = "daily" | "weekly" | "monthly";
+type QuotaTone = "empty" | "partial" | "met" | "exceed";
 
 type BookFormState = {
   title: string;
@@ -85,6 +86,7 @@ function App() {
   const [editingBookId, setEditingBookId] = useState<string | null>(null);
   const [isBookPanelOpen, setIsBookPanelOpen] = useState(false);
   const [isLogPanelOpen, setIsLogPanelOpen] = useState(false);
+  const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const [selectedBookId, setSelectedBookId] = useState("");
   const [progressPage, setProgressPage] = useState("");
   const [progressError, setProgressError] = useState("");
@@ -170,8 +172,13 @@ function App() {
     setPage("book");
   }
 
-  function beginLogPages() {
-    if (!activeBooks.some((book) => book.id === selectedBookId)) {
+  function beginLogPages(bookId?: string) {
+    const requestedBook = bookId ? activeBooks.find((book) => book.id === bookId) : undefined;
+
+    if (requestedBook) {
+      setSelectedBookId(requestedBook.id);
+      setProgressPage(String(requestedBook.currentPage));
+    } else if (!activeBooks.some((book) => book.id === selectedBookId)) {
       const firstActive = activeBooks[0];
       if (firstActive) {
         setSelectedBookId(firstActive.id);
@@ -362,6 +369,35 @@ function App() {
     setIsLogPanelOpen(false);
   }
 
+  function deleteLog(sessionId: string) {
+    setLibrary((current) => {
+      const deletedSession = current.sessions.find((session) => session.id === sessionId);
+      if (!deletedSession) {
+        return current;
+      }
+
+      const nextSessions = current.sessions.filter((session) => session.id !== sessionId);
+      const now = isoNow();
+      const nextBooks = current.books.map((book) => {
+        if (book.id !== deletedSession.bookId) {
+          return book;
+        }
+
+        return recalculateBookAfterLogDelete(book, deletedSession, nextSessions, now);
+      });
+
+      const affectedBook = nextBooks.find((book) => book.id === deletedSession.bookId);
+      if (affectedBook) {
+        setMilestone(`Deleted log for ${affectedBook.title}`);
+      }
+
+      return {
+        books: nextBooks,
+        sessions: nextSessions,
+      };
+    });
+  }
+
   const pageTitle =
     page === "home" ? "Reading desk" : page === "library" ? "Library" : selectedBook?.title ?? "Book";
 
@@ -372,9 +408,6 @@ function App() {
           <div>
             <p className="text-xs uppercase text-brass">Private reading ledger</p>
             <h1 className="mt-2 font-display text-5xl leading-none text-parchment">Lore</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-faded">
-              A calm desktop archive for pages, goals, consistency, and the books that are still asking for your time.
-            </p>
           </div>
 
           <div className="flex flex-col gap-3 lg:items-end">
@@ -386,6 +419,13 @@ function App() {
               <span>{pageTitle}</span>
               <span>{saveState}</span>
               <span>{new Date().toLocaleDateString()}</span>
+              <button
+                className="text-faded underline-offset-4 transition hover:text-brass hover:underline"
+                onClick={() => setIsHistoryPanelOpen(true)}
+                type="button"
+              >
+                history
+              </button>
             </div>
           </div>
         </header>
@@ -415,7 +455,6 @@ function App() {
             sessions={library.sessions}
             onAddBook={beginAddBook}
             onCategoryFilterChange={setCategoryFilter}
-            onEditBook={beginEdit}
             onOpenBook={openBook}
           />
         ) : null}
@@ -458,6 +497,12 @@ function App() {
             />
           </SidePanel>
         ) : null}
+
+        {isHistoryPanelOpen ? (
+          <SidePanel onClose={() => setIsHistoryPanelOpen(false)}>
+            <LogHistory books={library.books} sessions={library.sessions} onDeleteLog={deleteLog} />
+          </SidePanel>
+        ) : null}
       </div>
     </main>
   );
@@ -475,7 +520,7 @@ function HomePage({
   books: Book[];
   library: LibraryData;
   stats: ReturnType<typeof libraryStats>;
-  onLogPages: () => void;
+  onLogPages: (bookId?: string) => void;
   onOpenBook: (bookId: string) => void;
 }) {
   const totalPages = library.sessions.reduce((sum, session) => sum + session.pagesRead, 0);
@@ -492,15 +537,16 @@ function HomePage({
     })
     .sort((a, b) => b.remaining - a.remaining)
     .slice(0, 5);
+  const todayTone = quotaTone(stats.pagesToday > 0 ? 1 : 0);
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
       <section className="grid gap-5">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Pages today" value={stats.pagesToday} />
-          <Stat label="Current streak" value={`${stats.streak}d`} />
+          <Stat label="Pages today" tone={todayTone} value={stats.pagesToday} />
+          <Stat label="Current streak" tone={quotaTone(stats.streak > 0 ? 1 : 0)} value={`${stats.streak}d`} />
           <Stat label="Pages logged" value={totalPages} />
-          <Stat label="Avg / reading day" value={averagePages} />
+          <Stat label="Avg / reading day" tone={quotaTone(averagePages > 0 ? 1 : 0)} value={averagePages} />
         </div>
 
         <section className="rounded-md border border-white/10 bg-night p-5">
@@ -517,13 +563,15 @@ function HomePage({
             <button
               className="h-10 rounded-md bg-brass px-4 text-sm font-semibold text-charcoal transition hover:bg-[#d6b66d] disabled:cursor-not-allowed disabled:opacity-50"
               disabled={!activeBooks.length}
-              onClick={onLogPages}
+              onClick={() => onLogPages()}
               type="button"
             >
               Log pages
             </button>
           </div>
         </section>
+
+        <PendingTasks tasks={pendingTasks} onLogBook={onLogPages} />
 
         <section className="rounded-md border border-white/10 bg-night p-5">
           <div className="mb-5 flex items-end justify-between gap-4">
@@ -550,7 +598,6 @@ function HomePage({
 
       <aside className="grid content-start gap-5">
         <Heatmap range={90} sessions={library.sessions} streak={currentStreak(library.sessions)} />
-        <PendingTasks tasks={pendingTasks} onOpenBook={onOpenBook} />
       </aside>
     </div>
   );
@@ -658,7 +705,6 @@ function LibraryPage({
   sessions,
   onAddBook,
   onCategoryFilterChange,
-  onEditBook,
   onOpenBook,
 }: {
   books: Book[];
@@ -667,13 +713,20 @@ function LibraryPage({
   sessions: ReadingSession[];
   onAddBook: () => void;
   onCategoryFilterChange: (category: string) => void;
-  onEditBook: (book: Book) => void;
   onOpenBook: (bookId: string) => void;
 }) {
-  const categoryBooks =
-    categoryFilter === "All" ? books : books.filter((book) => book.category === categoryFilter);
-  const shelfBooks = categoryBooks.filter((book) => !book.finishedAt);
-  const archivedBooks = categoryBooks.filter((book) => book.finishedAt);
+  const isArchive = categoryFilter === "Archive";
+  const shelfBooks = books.filter((book) => {
+    if (isArchive) {
+      return Boolean(book.finishedAt);
+    }
+
+    if (book.finishedAt) {
+      return false;
+    }
+
+    return categoryFilter === "All" || book.category === categoryFilter;
+  });
 
   return (
     <div className="grid gap-8">
@@ -696,31 +749,29 @@ function LibraryPage({
 
           <CategoryChips
             activeCategory={categoryFilter}
-            categories={["All", ...categories]}
+            categories={["All", "Archive", ...categories]}
             onChange={onCategoryFilterChange}
           />
         </div>
 
         {shelfBooks.length === 0 ? (
           <div className="rounded-md border border-dashed border-white/15 bg-slate/60 p-8 text-center text-faded">
-            No books match this shelf.
+            {isArchive ? "No finished books yet." : "No books match this shelf."}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
             {shelfBooks.map((book) => (
               <SquareBookCard
+                archived={isArchive}
                 key={book.id}
                 book={book}
                 sessions={sessions}
-                onEdit={onEditBook}
                 onOpen={onOpenBook}
               />
             ))}
           </div>
         )}
       </section>
-
-      <ArchiveList books={archivedBooks} onOpenBook={onOpenBook} />
     </div>
   );
 }
@@ -750,78 +801,84 @@ function BookDetailPage({
   const cover = resolveCoverSource(book.coverImage);
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[330px_1fr]">
-      <aside className="rounded-md border border-white/10 bg-night p-5">
-        <button className="mb-5 text-sm text-faded transition hover:text-brass" onClick={onBack} type="button">
-          Back to library
-        </button>
-        <div className="book-detail-cover grid aspect-square place-items-center overflow-hidden rounded-md bg-slate">
-          {cover ? (
-            <img className="h-full w-full object-cover" src={cover} alt={`${book.title} cover`} />
-          ) : (
-            <div className="p-6 text-center">
-              <h2 className="fit-title font-display text-parchment">{book.title}</h2>
-              <p className="mt-3 text-sm text-faded">{book.author}</p>
+    <div className="grid gap-4">
+      <section className="grid gap-4 rounded-md border border-white/10 bg-night p-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+        <div className="grid gap-4 rounded-md border border-white/10 bg-slate p-4 sm:grid-cols-[128px_minmax(0,1fr)]">
+          <div className="book-detail-cover grid aspect-square place-items-center overflow-hidden rounded-md bg-charcoal">
+            {cover ? (
+              <BookArtwork alt={`${book.title} cover`} cover={cover} size="large" />
+            ) : (
+              <div className="p-4 text-center">
+                <h2 className="fit-title font-display text-parchment">{book.title}</h2>
+                <p className="mt-2 text-sm text-faded">{book.author}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="grid min-w-0 content-between gap-4">
+            <div className="min-w-0">
+              <button className="mb-3 text-sm text-faded transition hover:text-brass" onClick={onBack} type="button">
+                Back to library
+              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded border border-brass/40 px-2 py-1 text-xs uppercase text-brass">
+                  {book.category}
+                </span>
+                <span className="text-xs text-faded">{targetLabel(book)}</span>
+              </div>
+              <h2 className="mt-3 truncate font-display text-4xl leading-tight text-parchment">{book.title}</h2>
+              <p className="mt-1 truncate text-faded">{book.author}</p>
             </div>
-          )}
-        </div>
-        <div className="mt-5">
-          <p className="text-sm uppercase text-brass">{book.category}</p>
-          <h2 className="mt-2 font-display text-4xl leading-tight text-parchment">{book.title}</h2>
-          <p className="mt-2 text-faded">{book.author}</p>
-        </div>
-        <div className="mt-5">
-          <ThinProgress value={bookProgress(book)} />
-          <div className="mt-2 flex justify-between text-xs text-faded">
-            <span>Page {book.currentPage}</span>
-            <span>{book.totalPages}</span>
+
+            <div>
+              <ThinProgress value={bookProgress(book)} />
+              <div className="mt-2 flex justify-between text-xs text-faded">
+                <span>Page {book.currentPage}</span>
+                <span>{Math.round(bookProgress(book) * 100)}% · {book.totalPages} pages</span>
+              </div>
+              <button
+                className="mt-4 h-9 rounded-md border border-white/10 px-4 text-sm text-parchment transition hover:border-brass hover:text-brass"
+                onClick={() => onEdit(book)}
+                type="button"
+              >
+                Edit book
+              </button>
+            </div>
           </div>
         </div>
-        <button
-          className="mt-5 h-11 w-full rounded-md border border-white/10 text-sm text-parchment transition hover:border-brass hover:text-brass"
-          onClick={() => onEdit(book)}
-          type="button"
-        >
-          Edit book
-        </button>
-      </aside>
 
-      <section className="grid gap-5">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="Pages recorded" value={analytics.pagesRecorded} />
-          <Stat label="Pages left" value={analytics.pagesRemaining} />
-          <Stat label="Goal meet rate" value={`${analytics.goalMeetRate}%`} />
-          <Stat label="Best day" value={analytics.bestDayPages} />
+        <div className="grid grid-cols-2 gap-3">
+          <Stat label="Pages today" tone={quotaTone(analytics.pagesToday / Math.max(1, target.targetPages))} value={analytics.pagesToday} />
+          <Stat label="Pages left" tone={quotaTone(analytics.pagesRemaining === 0 ? 1 : 0.55)} value={analytics.pagesRemaining} />
+          <Stat label="Goal meet rate" tone={quotaTone(analytics.goalMeetRate / 100)} value={`${analytics.goalMeetRate}%`} />
+          <Stat label="Best day" tone={quotaTone(analytics.bestDayPages / Math.max(1, target.targetPages))} value={analytics.bestDayPages} />
         </div>
+      </section>
 
-        <div className="grid gap-5 lg:grid-cols-[1fr_280px]">
-          <section className="rounded-md border border-white/10 bg-night p-5">
-            <div className="mb-5 flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm uppercase text-faded">Goal cadence</p>
-                <h3 className="mt-1 font-display text-3xl text-parchment">Target graph</h3>
-              </div>
-              <ProgressRing progress={target.progress} />
+      <section className="grid gap-4">
+        <div className="rounded-md border border-white/10 bg-night p-4">
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm uppercase text-faded">Goal cadence</p>
+              <h3 className="mt-1 font-display text-3xl text-parchment">Target graph</h3>
             </div>
-            <GoalGrid windows={analytics.goalWindows} />
-          </section>
+            <ProgressRing progress={target.progress} />
+          </div>
+          <GoalGrid windows={analytics.goalWindows} />
 
-          <section className="rounded-md border border-white/10 bg-night p-5">
-            <p className="text-sm uppercase text-faded">Pace</p>
-            <h3 className="mt-1 font-display text-3xl text-parchment">Now</h3>
-            <dl className="mt-5 grid gap-4 text-sm">
-              <Metric label="Target" value={targetLabel(book)} />
-              <Metric label="This window" value={`${target.pagesRead}/${target.targetPages} pages`} />
-              <Metric label="Average session" value={`${analytics.averageSessionPages} pages`} />
-              <Metric label="Reading days" value={`${analytics.readingDays}`} />
-              <Metric label="Sessions" value={`${analytics.sessionCount}`} />
-              <Metric label="Estimated finish" value={analytics.estimatedFinish} />
-            </dl>
-          </section>
+          <dl className="mt-4 grid gap-3 border-t border-white/10 pt-4 text-sm sm:grid-cols-2 lg:grid-cols-5">
+            <Metric label="This window" value={`${target.pagesRead}/${target.targetPages} pages`} />
+            <Metric label="Average session" value={`${analytics.averageSessionPages} pages`} />
+            <Metric label="Reading days" value={`${analytics.readingDays}`} />
+            <Metric label="Sessions" value={`${analytics.sessionCount}`} />
+            <Metric label="Estimated finish" value={analytics.estimatedFinish} />
+          </dl>
         </div>
+      </section>
 
-        <section className="rounded-md border border-white/10 bg-night p-5">
-          <div className="mb-5 flex items-end justify-between gap-4">
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="rounded-md border border-white/10 bg-night p-4">
+          <div className="mb-4 flex items-end justify-between gap-4">
             <div>
               <p className="text-sm uppercase text-faded">Book activity</p>
               <h3 className="mt-1 font-display text-3xl text-parchment">Pages by day</h3>
@@ -829,18 +886,18 @@ function BookDetailPage({
             <p className="text-sm text-faded">{analytics.pagesRecorded} pages</p>
           </div>
           <PagesBarChart sessions={bookSessions} />
-        </section>
+        </div>
 
-        <section className="rounded-md border border-white/10 bg-night p-5">
-          <div className="mb-5 flex items-end justify-between gap-4">
+        <div className="rounded-md border border-white/10 bg-night p-4">
+          <div className="mb-4 flex items-end justify-between gap-4">
             <div>
               <p className="text-sm uppercase text-faded">Consistency</p>
               <h3 className="mt-1 font-display text-3xl text-parchment">Book heatmap</h3>
             </div>
-            <p className="text-sm text-faded">{analytics.currentBookStreak}d streak</p>
+            <p className="text-sm text-faded">{analytics.currentBookStreak}d</p>
           </div>
           <Heatmap compact range={90} sessions={bookSessions} streak={analytics.currentBookStreak} />
-        </section>
+        </div>
       </section>
     </div>
   );
@@ -862,46 +919,83 @@ function SidePanel({ children, onClose }: { children: ReactNode; onClose: () => 
   );
 }
 
-function ArchiveList({ books, onOpenBook }: { books: Book[]; onOpenBook: (bookId: string) => void }) {
-  const archived = [...books].sort((a, b) => (b.finishedAt ?? "").localeCompare(a.finishedAt ?? ""));
+function LogHistory({
+  books,
+  sessions,
+  onDeleteLog,
+}: {
+  books: Book[];
+  sessions: ReadingSession[];
+  onDeleteLog: (sessionId: string) => void;
+}) {
+  const bookById = useMemo(
+    () => new Map(books.map((book) => [book.id, book])),
+    [books],
+  );
+  const sortedSessions = useMemo(
+    () =>
+      [...sessions].sort((a, b) => {
+        const created = b.createdAt.localeCompare(a.createdAt);
+        return created === 0 ? b.date.localeCompare(a.date) : created;
+      }),
+    [sessions],
+  );
+
+  function confirmDelete(session: ReadingSession) {
+    const book = bookById.get(session.bookId);
+    const label = book ? `${book.title}: ${session.pagesRead} pages` : `${session.pagesRead} pages`;
+    if (window.confirm(`Delete this log?\n\n${label}`)) {
+      onDeleteLog(session.id);
+    }
+  }
 
   return (
-    <section className="rounded-md border border-white/10 bg-night p-5">
-      <div className="mb-4 flex items-end justify-between gap-4">
-        <div>
-          <p className="text-sm uppercase text-faded">Archive</p>
-          <h2 className="mt-1 font-display text-3xl text-parchment">Finished books</h2>
-        </div>
-        <p className="text-sm text-faded">{archived.length} finished</p>
+    <section className="grid gap-4">
+      <div>
+        <p className="text-sm uppercase text-faded">History</p>
+        <h2 className="mt-1 font-display text-3xl text-parchment">Reading logs</h2>
+        <p className="mt-2 text-sm leading-6 text-faded">
+          Delete mistaken entries quietly. The affected book page will be recalculated from the remaining logs.
+        </p>
       </div>
 
-      {archived.length ? (
+      {sortedSessions.length ? (
         <div className="grid gap-2">
-          {archived.map((book) => (
-            <button
-              key={book.id}
-              className="grid gap-3 rounded-md border border-white/10 bg-slate px-4 py-3 text-left transition hover:border-brass md:grid-cols-[1fr_120px_120px]"
-              onClick={() => onOpenBook(book.id)}
-              type="button"
-            >
-              <span className="min-w-0">
-                <span className="block truncate font-display text-lg text-parchment">{book.title}</span>
-                <span className="mt-1 block truncate text-xs text-faded">{book.author}</span>
-              </span>
-              <span>
-                <span className="block text-[11px] uppercase text-faded">Added</span>
-                <span className="mt-1 block text-sm text-parchment">{displayDate(book.addedAt)}</span>
-              </span>
-              <span>
-                <span className="block text-[11px] uppercase text-faded">Finished</span>
-                <span className="mt-1 block text-sm text-brass">{displayDate(book.finishedAt)}</span>
-              </span>
-            </button>
-          ))}
+          {sortedSessions.map((session) => {
+            const book = bookById.get(session.bookId);
+
+            return (
+              <article key={session.id} className="rounded-md border border-white/10 bg-slate p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-display text-lg text-parchment">
+                      {book?.title ?? "Deleted book"}
+                    </p>
+                    <p className="mt-1 text-xs text-faded">
+                      {displayDate(session.createdAt)} · pages {session.fromPage} to {session.toPage}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded bg-charcoal px-2 py-1 text-xs text-brass">
+                    +{session.pagesRead}
+                  </span>
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <p className="truncate text-xs text-faded">{book?.author ?? session.date}</p>
+                  <button
+                    className="text-xs text-faded transition hover:text-brass"
+                    onClick={() => confirmDelete(session)}
+                    type="button"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       ) : (
         <p className="rounded-md border border-dashed border-white/15 bg-slate/50 p-5 text-sm text-faded">
-          Finished books will appear here with their added and completion dates.
+          No reading logs yet.
         </p>
       )}
     </section>
@@ -1045,14 +1139,14 @@ function BookForm({
 }
 
 function SquareBookCard({
+  archived = false,
   book,
   sessions,
-  onEdit,
   onOpen,
 }: {
+  archived?: boolean;
   book: Book;
   sessions: ReadingSession[];
-  onEdit: (book: Book) => void;
   onOpen: (bookId: string) => void;
 }) {
   const cover = resolveCoverSource(book.coverImage);
@@ -1060,46 +1154,70 @@ function SquareBookCard({
   const target = targetWindow(book, sessions);
   const isFinished = Boolean(book.finishedAt);
 
+  const meta = archived
+    ? `Added ${displayDate(book.addedAt)} · Finished ${displayDate(book.finishedAt)}`
+    : book.author;
+
   return (
     <article className="group relative aspect-square overflow-hidden rounded-md border border-white/10 bg-slate transition hover:border-brass">
-      <button className="absolute inset-0 text-left" onClick={() => onOpen(book.id)} type="button">
-        {cover ? (
-          <>
-            <img className="h-full w-full object-cover" src={cover} alt={`${book.title} cover`} />
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-3">
-              <h3 className="truncate font-display text-lg text-parchment">{book.title}</h3>
-              <p className="truncate text-xs text-faded">{book.author}</p>
+      <button className="grid h-full w-full grid-rows-[minmax(0,1fr)_82px] text-left" onClick={() => onOpen(book.id)} type="button">
+        <div className="min-h-0 overflow-hidden">
+          {cover ? (
+            <BookArtwork alt={`${book.title} cover`} cover={cover} />
+          ) : (
+            <div className="grid h-full place-items-center p-4 text-center">
+              <div>
+                <h3 className="fit-title font-display text-parchment">{book.title}</h3>
+                <p className="fit-author mt-3 text-faded">{meta}</p>
+              </div>
             </div>
-          </>
-        ) : (
-          <div className="grid h-full place-items-center p-4 text-center">
-            <div>
-              <h3 className="fit-title font-display text-parchment">{book.title}</h3>
-              <p className="fit-author mt-3 text-faded">{book.author}</p>
-            </div>
+          )}
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-t border-white/10 bg-charcoal/85 p-3">
+          <div className="min-w-0">
+            <h3 className="truncate font-display text-lg leading-tight text-parchment">{book.title}</h3>
+            <p className="mt-1 truncate text-xs text-faded">{meta}</p>
           </div>
-        )}
+          <div className="text-right">
+            <p className="max-w-24 truncate text-[11px] uppercase text-brass">{book.category}</p>
+            <p className="mt-1 text-xs text-parchment">{Math.round(progress * 100)}%</p>
+          </div>
+        </div>
       </button>
-      <div className="pointer-events-none absolute inset-x-3 top-3 flex items-center justify-between gap-2">
-        <span className="rounded bg-charcoal/90 px-2 py-1 text-[11px] text-brass">{book.category}</span>
-        <span className="rounded bg-charcoal/90 px-2 py-1 text-[11px] text-parchment">
-          {Math.round(progress * 100)}%
-        </span>
-      </div>
       <div className="absolute inset-x-0 bottom-0 h-1 bg-charcoal">
         <div className="h-full bg-brass" style={{ width: `${progress * 100}%` }} />
       </div>
-      <div className="absolute right-2 top-11 opacity-0 transition group-hover:opacity-100">
-        <button
-          className="rounded bg-charcoal/90 px-2 py-1 text-xs text-parchment transition hover:text-brass"
-          onClick={() => onEdit(book)}
-          type="button"
-        >
-          Edit
-        </button>
-      </div>
       {(isFinished || target.progress >= 1) && <div className="absolute inset-0 ring-1 ring-inset ring-brass/70" />}
     </article>
+  );
+}
+
+function BookArtwork({
+  alt,
+  cover,
+  size = "shelf",
+}: {
+  alt: string;
+  cover: string;
+  size?: "shelf" | "large";
+}) {
+  const paddingClass = size === "large" ? "p-8" : "p-4";
+
+  return (
+    <div className={`relative h-full w-full overflow-hidden ${paddingClass}`}>
+      <img
+        aria-hidden="true"
+        className="absolute inset-0 h-full w-full scale-125 object-cover opacity-45 blur-xl"
+        src={cover}
+        alt=""
+      />
+      <div className="absolute inset-0 bg-charcoal/45" />
+      <img
+        className="relative z-10 mx-auto h-full w-full object-contain drop-shadow-2xl"
+        src={cover}
+        alt={alt}
+      />
+    </div>
   );
 }
 
@@ -1128,40 +1246,48 @@ function RecentBooks({ books, onOpenBook }: { books: Book[]; onOpenBook: (bookId
 
 function PendingTasks({
   tasks,
-  onOpenBook,
+  onLogBook,
 }: {
   tasks: Array<{ book: Book; target: ReturnType<typeof targetWindow>; remaining: number }>;
-  onOpenBook: (bookId: string) => void;
+  onLogBook: (bookId: string) => void;
 }) {
   return (
-    <section className="rounded-md border border-white/10 bg-night p-5">
-      <div className="mb-4">
-        <p className="text-sm uppercase text-faded">Pending</p>
-        <h2 className="mt-1 font-display text-3xl text-parchment">Today&apos;s tasks</h2>
+    <section className="rounded-md border border-brass/30 bg-burgundy/10 p-4 shadow-[0_0_32px_rgba(197,160,89,0.06)]">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <p className="text-sm uppercase text-faded">Pending</p>
+          <h2 className="mt-1 font-display text-3xl text-parchment">Today&apos;s tasks</h2>
+        </div>
       </div>
-      <div className="grid gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
         {tasks.length ? (
-          tasks.map(({ book, target, remaining }) => (
-            <button
-              key={book.id}
-              className="rounded-md border border-white/10 bg-slate p-3 text-left transition hover:border-brass"
-              onClick={() => onOpenBook(book.id)}
-              type="button"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate font-display text-lg text-parchment">{book.title}</p>
-                  <p className="mt-1 text-xs text-faded">
-                    {remaining > 0 ? `${remaining} pages left for target` : "Target met"}
-                  </p>
+          tasks.map(({ book, target, remaining }) => {
+            const ratio = quotaRatio(target);
+            const tone = quotaTone(ratio);
+            return (
+              <button
+                key={book.id}
+                className={`grid min-h-24 rounded-md border bg-slate p-3 text-left transition hover:border-brass ${quotaBorderClass(tone)}`}
+                onClick={() => onLogBook(book.id)}
+                type="button"
+              >
+                <div className="flex h-full flex-col justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="line-fit-small font-display text-parchment">{book.title}</p>
+                    <p className="mt-2 text-xs text-faded">
+                      {remaining > 0 ? `${remaining} pages left` : "Target met"}
+                    </p>
+                  </div>
+                  <div>
+                    <span className={`text-sm ${quotaTextClass(tone)}`}>{Math.round(ratio * 100)}%</span>
+                    <ThinProgress tone={tone} value={ratio} />
+                  </div>
                 </div>
-                <span className="text-sm text-brass">{Math.round(target.progress * 100)}%</span>
-              </div>
-              <ThinProgress value={target.progress} />
-            </button>
-          ))
+              </button>
+            );
+          })
         ) : (
-          <p className="text-sm text-faded">No active tasks.</p>
+          <p className="col-span-2 text-sm text-faded">No active tasks.</p>
         )}
       </div>
     </section>
@@ -1362,9 +1488,11 @@ function CategoryChips({
   categories: string[];
   onChange: (category: string) => void;
 }) {
+  const uniqueCategories = Array.from(new Set(categories));
+
   return (
     <div className="flex flex-wrap gap-2">
-      {categories.map((category) => (
+      {uniqueCategories.map((category) => (
         <button
           key={category}
           className={`rounded-md border px-3 py-2 text-sm transition ${
@@ -1430,18 +1558,26 @@ type TextFieldProps = {
   onChange: (value: string) => void;
 };
 
-function Stat({ label, value }: { label: string; value: number | string }) {
+function Stat({
+  label,
+  tone,
+  value,
+}: {
+  label: string;
+  tone?: QuotaTone;
+  value: number | string;
+}) {
   return (
     <div className="rounded-md border border-white/10 bg-slate px-4 py-3">
       <p className="text-xs uppercase text-faded">{label}</p>
-      <p className="mt-2 font-display text-3xl text-parchment">{value}</p>
+      <p className={`mt-2 font-display text-3xl ${tone ? quotaTextClass(tone) : "text-parchment"}`}>{value}</p>
     </div>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border-b border-white/10 pb-3">
+    <div className="rounded-md border border-white/10 bg-slate/70 px-3 py-2">
       <dt className="text-faded">{label}</dt>
       <dd className="mt-1 text-parchment">{value}</dd>
     </div>
@@ -1451,29 +1587,32 @@ function Metric({ label, value }: { label: string; value: string }) {
 function ProgressRing({ progress }: { progress: number }) {
   const clamped = Math.min(1, Math.max(0, progress));
   const degrees = Math.round(clamped * 360);
+  const tone = quotaTone(progress);
+  const color = quotaHex(tone);
 
   return (
     <div
       aria-label={`Target: ${Math.round(clamped * 100)}%`}
       className="grid h-14 w-14 shrink-0 place-items-center rounded-full"
       style={{
-        background: `conic-gradient(#C5A059 ${degrees}deg, #2b2b2b 0deg)`,
+        background: `conic-gradient(${color} ${degrees}deg, #2b2b2b 0deg)`,
       }}
       title={`Target: ${Math.round(clamped * 100)}%`}
     >
-      <div className="grid h-10 w-10 place-items-center rounded-full bg-slate text-xs font-semibold text-parchment">
+      <div className={`grid h-10 w-10 place-items-center rounded-full bg-slate text-xs font-semibold ${quotaTextClass(tone)}`}>
         {Math.round(clamped * 100)}%
       </div>
     </div>
   );
 }
 
-function ThinProgress({ value }: { value: number }) {
+function ThinProgress({ tone, value }: { tone?: QuotaTone; value: number }) {
   const width = Math.round(Math.min(1, Math.max(0, value)) * 100);
+  const progressTone = tone ?? "met";
 
   return (
     <div className="mt-3 h-1.5 overflow-hidden rounded bg-charcoal">
-      <div className="h-full rounded bg-brass" style={{ width: `${width}%` }} />
+      <div className={`h-full rounded ${quotaBgClass(progressTone)}`} style={{ width: `${width}%` }} />
     </div>
   );
 }
@@ -1481,6 +1620,7 @@ function ThinProgress({ value }: { value: number }) {
 function bookAnalytics(book: Book, sessions: ReadingSession[]) {
   const bookSessions = sessions.filter((session) => session.bookId === book.id);
   const pagesRecorded = bookSessions.reduce((sum, session) => sum + session.pagesRead, 0);
+  const pagesToday = pagesForBookInRange(sessions, book.id, todayKey(), todayKey());
   const totals = pagesByDate(bookSessions);
   const readingDays = Object.values(totals).filter((pages) => pages > 0).length;
   const bestDayPages = Math.max(0, ...Object.values(totals));
@@ -1508,6 +1648,7 @@ function bookAnalytics(book: Book, sessions: ReadingSession[]) {
     goalMeetRate,
     goalWindows,
     pagesRecorded,
+    pagesToday,
     pagesRemaining,
     readingDays,
     sessionCount,
@@ -1560,7 +1701,7 @@ function makeGoalWindow(start: string, end: string, targetPages: number, pagesRe
     end,
     targetPages,
     pagesRead,
-    progress: Math.min(1, pagesRead / Math.max(1, targetPages)),
+    progress: pagesRead / Math.max(1, targetPages),
   };
 }
 
@@ -1713,6 +1854,38 @@ function sortBooks(books: Book[]): Book[] {
   });
 }
 
+function recalculateBookAfterLogDelete(
+  book: Book,
+  deletedSession: ReadingSession,
+  remainingSessions: ReadingSession[],
+  updatedAt: string,
+): Book {
+  const bookSessions = remainingSessions
+    .filter((session) => session.bookId === book.id)
+    .sort(compareSessionsAscending);
+  const latestSession = bookSessions[bookSessions.length - 1];
+  const nextPage = latestSession
+    ? latestSession.toPage
+    : Math.min(book.totalPages, deletedSession.fromPage);
+  const completionSession = bookSessions.find((session) => session.toPage >= book.totalPages);
+
+  return {
+    ...book,
+    currentPage: nextPage,
+    updatedAt,
+    finishedAt: nextPage >= book.totalPages ? completionSession?.createdAt ?? book.finishedAt : null,
+  };
+}
+
+function compareSessionsAscending(a: ReadingSession, b: ReadingSession): number {
+  const created = a.createdAt.localeCompare(b.createdAt);
+  if (created !== 0) {
+    return created;
+  }
+
+  return a.date.localeCompare(b.date);
+}
+
 function resolveCoverSource(value: string | null): string | null {
   if (!value) {
     return null;
@@ -1772,30 +1945,90 @@ function displayDate(value: string | null | undefined): string {
   });
 }
 
+function quotaRatio(target: ReturnType<typeof targetWindow>): number {
+  return target.pagesRead / Math.max(1, target.targetPages);
+}
+
+function quotaTone(ratio: number): QuotaTone {
+  if (ratio <= 0) {
+    return "empty";
+  }
+  if (ratio < 1) {
+    return "partial";
+  }
+  if (ratio <= 1.25) {
+    return "met";
+  }
+  return "exceed";
+}
+
+function quotaTextClass(tone: QuotaTone): string {
+  switch (tone) {
+    case "empty":
+      return "text-quota-red";
+    case "partial":
+      return "text-quota-yellow";
+    case "met":
+      return "text-quota-green";
+    case "exceed":
+      return "text-quota-blue";
+  }
+}
+
+function quotaBgClass(tone: QuotaTone): string {
+  switch (tone) {
+    case "empty":
+      return "bg-quota-red";
+    case "partial":
+      return "bg-quota-yellow";
+    case "met":
+      return "bg-quota-green";
+    case "exceed":
+      return "bg-quota-blue";
+  }
+}
+
+function quotaBorderClass(tone: QuotaTone): string {
+  switch (tone) {
+    case "empty":
+      return "border-quota-red/35";
+    case "partial":
+      return "border-quota-yellow/35";
+    case "met":
+      return "border-quota-green/40";
+    case "exceed":
+      return "border-quota-blue/45";
+  }
+}
+
+function quotaHex(tone: QuotaTone): string {
+  switch (tone) {
+    case "empty":
+      return "#B97878";
+    case "partial":
+      return "#D8BD73";
+    case "met":
+      return "#9FBD8F";
+    case "exceed":
+      return "#8EC7D2";
+  }
+}
+
 function heatClass(pages: number, intensity: number): string {
   if (pages === 0) {
-    return "bg-charcoal";
+    return "bg-quota-red/45";
   }
   if (intensity < 0.34) {
-    return "bg-burgundy";
+    return "bg-quota-yellow/70";
   }
   if (intensity < 0.67) {
-    return "bg-brass/60";
+    return "bg-quota-green/75";
   }
-  return "bg-brass";
+  return "bg-quota-blue/80";
 }
 
 function goalClass(progress: number, pagesRead: number): string {
-  if (pagesRead === 0) {
-    return "bg-charcoal";
-  }
-  if (progress >= 1) {
-    return "bg-brass";
-  }
-  if (progress >= 0.5) {
-    return "bg-brass/50";
-  }
-  return "bg-burgundy";
+  return quotaBgClass(quotaTone(pagesRead === 0 ? 0 : progress));
 }
 
 export default App;
