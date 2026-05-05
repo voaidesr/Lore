@@ -1,4 +1,5 @@
-import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import {
@@ -36,6 +37,7 @@ type BookFormState = {
   author: string;
   category: string;
   coverImage: string;
+  pdfPath: string;
   totalPages: string;
   currentPage: string;
   targetKind: TargetKind;
@@ -67,6 +69,7 @@ const defaultBookForm = (): BookFormState => ({
   author: "",
   category: "",
   coverImage: "",
+  pdfPath: "",
   totalPages: "",
   currentPage: "0",
   targetKind: "pagesPerDay",
@@ -190,6 +193,45 @@ function App() {
     setIsLogPanelOpen(true);
   }
 
+  async function choosePdfPath() {
+    try {
+      if (!isTauri()) {
+        setFormError("PDF file picking is available in the desktop app.");
+        return;
+      }
+
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+
+      if (typeof selected === "string") {
+        updateForm("pdfPath", selected);
+        setFormError("");
+      }
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function openPdfInOkular(book: Book) {
+    if (!book.pdfPath) {
+      return;
+    }
+
+    if (!isTauri()) {
+      setMilestone("Opening PDFs in Okular is available in the desktop app.");
+      return;
+    }
+
+    try {
+      await invoke("open_pdf_in_okular", { path: book.pdfPath });
+      setMilestone(`Opened PDF for ${book.title}`);
+    } catch (error) {
+      setMilestone(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   function updateForm(field: keyof BookFormState, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
   }
@@ -221,6 +263,7 @@ function App() {
 
     const now = isoNow();
     const coverImage = form.coverImage.trim() || null;
+    const pdfPath = form.pdfPath.trim() || null;
 
     if (editingBookId) {
       setLibrary((current) => ({
@@ -233,6 +276,7 @@ function App() {
                 author,
                 category,
                 coverImage,
+                pdfPath,
                 totalPages,
                 currentPage,
                 target,
@@ -250,6 +294,7 @@ function App() {
         author,
         category,
         coverImage,
+        pdfPath,
         totalPages,
         currentPage,
         target,
@@ -284,7 +329,6 @@ function App() {
     setForm(formFromBook(book));
     setFormError("");
     setIsBookPanelOpen(true);
-    setPage("library");
   }
 
   function cancelEdit() {
@@ -465,6 +509,7 @@ function App() {
             sessions={library.sessions}
             onBack={() => setPage("library")}
             onEdit={beginEdit}
+            onOpenPdf={openPdfInOkular}
           />
         ) : null}
 
@@ -476,6 +521,7 @@ function App() {
               form={form}
               formError={formError}
               onCancelEdit={cancelEdit}
+              onChoosePdf={choosePdfPath}
               onSubmit={handleBookSubmit}
               onUpdate={updateForm}
             />
@@ -781,11 +827,13 @@ function BookDetailPage({
   sessions,
   onBack,
   onEdit,
+  onOpenPdf,
 }: {
   book: Book | undefined;
   sessions: ReadingSession[];
   onBack: () => void;
   onEdit: (book: Book) => void;
+  onOpenPdf: (book: Book) => void;
 }) {
   if (!book) {
     return (
@@ -836,13 +884,29 @@ function BookDetailPage({
                 <span>Page {book.currentPage}</span>
                 <span>{Math.round(bookProgress(book) * 100)}% · {book.totalPages} pages</span>
               </div>
-              <button
-                className="mt-4 h-9 rounded-md border border-white/10 px-4 text-sm text-parchment transition hover:border-brass hover:text-brass"
-                onClick={() => onEdit(book)}
-                type="button"
-              >
-                Edit book
-              </button>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  className="h-9 rounded-md border border-white/10 px-4 text-sm text-parchment transition hover:border-brass hover:text-brass"
+                  onClick={() => onEdit(book)}
+                  type="button"
+                >
+                  Edit book
+                </button>
+                {book.pdfPath ? (
+                  <button
+                    className="text-xs text-faded underline-offset-4 transition hover:text-brass hover:underline"
+                    onClick={() => onOpenPdf(book)}
+                    type="button"
+                  >
+                    open in Okular
+                  </button>
+                ) : null}
+              </div>
+              {book.pdfPath ? (
+                <p className="mt-2 truncate text-xs text-faded" title={book.pdfPath}>
+                  PDF attached
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1008,6 +1072,7 @@ function BookForm({
   form,
   formError,
   onCancelEdit,
+  onChoosePdf,
   onSubmit,
   onUpdate,
 }: {
@@ -1016,6 +1081,7 @@ function BookForm({
   form: BookFormState;
   formError: string;
   onCancelEdit: () => void;
+  onChoosePdf: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onUpdate: (field: keyof BookFormState, value: string) => void;
 }) {
@@ -1058,6 +1124,27 @@ function BookForm({
           value={form.coverImage}
           onChange={(value) => onUpdate("coverImage", value)}
         />
+        <div className="grid gap-2">
+          <TextField label="PDF path" value={form.pdfPath} onChange={(value) => onUpdate("pdfPath", value)} />
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="h-9 rounded-md border border-white/10 bg-slate px-3 text-sm text-faded transition hover:border-brass hover:text-parchment"
+              onClick={onChoosePdf}
+              type="button"
+            >
+              Find PDF
+            </button>
+            {form.pdfPath ? (
+              <button
+                className="h-9 rounded-md border border-white/10 px-3 text-sm text-faded transition hover:border-brass hover:text-brass"
+                onClick={() => onUpdate("pdfPath", "")}
+                type="button"
+              >
+                Clear PDF
+              </button>
+            ) : null}
+          </div>
+        </div>
 
         <div className="grid grid-cols-2 gap-3">
           <TextField
@@ -1818,6 +1905,7 @@ function formFromBook(book: Book): BookFormState {
     author: book.author,
     category: book.category,
     coverImage: book.coverImage ?? "",
+    pdfPath: book.pdfPath ?? "",
     totalPages: String(book.totalPages),
     currentPage: String(book.currentPage),
     targetKind: book.target.kind,
@@ -1828,6 +1916,7 @@ function normalizeBook(book: Book): Book {
   return {
     ...book,
     category: normalizeCategory(book.category),
+    pdfPath: book.pdfPath ?? null,
   };
 }
 

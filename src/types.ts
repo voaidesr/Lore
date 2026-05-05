@@ -10,6 +10,7 @@ export type Book = {
   author: string;
   category: string;
   coverImage: string | null;
+  pdfPath: string | null;
   totalPages: number;
   currentPage: number;
   target: ReadingTarget;

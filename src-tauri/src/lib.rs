@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, process::Command};
 use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -18,6 +18,8 @@ struct Book {
     #[serde(default = "default_category")]
     category: String,
     cover_image: Option<String>,
+    #[serde(default)]
+    pdf_path: Option<String>,
     total_pages: u32,
     current_page: u32,
     target: ReadingTarget,
@@ -106,11 +108,34 @@ fn save_library(app: AppHandle, data: LibraryData) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_pdf_in_okular(path: String) -> Result<(), String> {
+    let pdf_path = PathBuf::from(path);
+
+    if !pdf_path.exists() {
+        return Err(format!("PDF not found: {}", pdf_path.display()));
+    }
+
+    Command::new("okular")
+        .arg(&pdf_path)
+        .spawn()
+        .map_err(|err| {
+            format!("Could not open Okular. Install it with `sudo dnf install okular`: {err}")
+        })?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![load_library, save_library])
+        .invoke_handler(tauri::generate_handler![
+            load_library,
+            save_library,
+            open_pdf_in_okular
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
