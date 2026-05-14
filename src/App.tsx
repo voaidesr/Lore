@@ -22,6 +22,7 @@ import { loadLibrary, saveLibrary } from "./lib/storage";
 import {
   emptyLibrary,
   type Book,
+  type BookShelf,
   type LibraryData,
   type ReadingSession,
   type ReadingTarget,
@@ -36,6 +37,7 @@ type BookFormState = {
   title: string;
   author: string;
   category: string;
+  shelf: BookShelf;
   coverImage: string;
   pdfPath: string;
   totalPages: string;
@@ -44,6 +46,12 @@ type BookFormState = {
   pages: string;
   days: string;
   finishBy: string;
+};
+
+type TargetFormState = Pick<BookFormState, "targetKind" | "pages" | "days" | "finishBy">;
+
+type StartReadingFormState = TargetFormState & {
+  currentPage: string;
 };
 
 type GoalWindow = {
@@ -68,9 +76,18 @@ const defaultBookForm = (): BookFormState => ({
   title: "",
   author: "",
   category: "",
+  shelf: "active",
   coverImage: "",
   pdfPath: "",
   totalPages: "",
+  currentPage: "0",
+  targetKind: "pagesPerDay",
+  pages: "25",
+  days: "2",
+  finishBy: addDays(todayKey(), 30),
+});
+
+const defaultStartReadingForm = (): StartReadingFormState => ({
   currentPage: "0",
   targetKind: "pagesPerDay",
   pages: "25",
@@ -88,8 +105,11 @@ function App() {
   const [formError, setFormError] = useState("");
   const [editingBookId, setEditingBookId] = useState<string | null>(null);
   const [isBookPanelOpen, setIsBookPanelOpen] = useState(false);
+  const [isStartPanelOpen, setIsStartPanelOpen] = useState(false);
   const [isLogPanelOpen, setIsLogPanelOpen] = useState(false);
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
+  const [startForm, setStartForm] = useState<StartReadingFormState>(defaultStartReadingForm);
+  const [startError, setStartError] = useState("");
   const [selectedBookId, setSelectedBookId] = useState("");
   const [progressPage, setProgressPage] = useState("");
   const [progressError, setProgressError] = useState("");
@@ -145,10 +165,11 @@ function App() {
   const stats = useMemo(() => libraryStats(library), [library]);
   const sortedBooks = useMemo(() => sortBooks(library.books), [library.books]);
   const activeBooks = useMemo(
-    () => sortedBooks.filter((book) => !book.finishedAt),
+    () => sortedBooks.filter(isActiveBook),
     [sortedBooks],
   );
   const selectedBook = library.books.find((book) => book.id === selectedBookId);
+  const selectedActiveBook = activeBooks.find((book) => book.id === selectedBookId);
 
   useEffect(() => {
     if (!isLoaded) {
@@ -161,14 +182,14 @@ function App() {
     }
 
     if (!library.books.some((book) => book.id === selectedBookId)) {
-      const nextBook = library.books.find((book) => !book.finishedAt) ?? library.books[0];
+      const nextBook = library.books.find(isActiveBook) ?? library.books.find(isReadingListBook) ?? library.books[0];
       setSelectedBookId(nextBook.id);
     }
   }, [isLoaded, library.books, selectedBookId]);
 
   useEffect(() => {
-    setProgressPage(selectedBook ? String(selectedBook.currentPage) : "");
-  }, [selectedBook]);
+    setProgressPage(selectedActiveBook ? String(selectedActiveBook.currentPage) : "");
+  }, [selectedActiveBook]);
 
   function openBook(bookId: string) {
     setSelectedBookId(bookId);
@@ -236,15 +257,21 @@ function App() {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
+  function updateStartForm(field: keyof StartReadingFormState, value: string) {
+    setStartForm((current) => ({ ...current, [field]: value }));
+  }
+
   function handleBookSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const title = form.title.trim();
     const author = form.author.trim();
     const category = normalizeCategory(form.category);
+    const shelf = form.shelf;
     const totalPages = positiveInteger(form.totalPages);
-    const currentPage = clampPage(Math.round(Number(form.currentPage) || 0), totalPages);
-    const target = targetFromForm(form);
+    const currentPage =
+      shelf === "readingList" ? 0 : clampPage(Math.round(Number(form.currentPage) || 0), totalPages);
+    const target = shelf === "readingList" ? defaultReadingTarget() : targetFromForm(form);
 
     if (!title || !author) {
       setFormError("Title and author are required.");
@@ -256,7 +283,7 @@ function App() {
       return;
     }
 
-    if (!target) {
+    if (shelf === "active" && !target) {
       setFormError("Set a valid reading target.");
       return;
     }
@@ -264,6 +291,7 @@ function App() {
     const now = isoNow();
     const coverImage = form.coverImage.trim() || null;
     const pdfPath = form.pdfPath.trim() || null;
+    const resolvedTarget = target ?? defaultReadingTarget();
 
     if (editingBookId) {
       setLibrary((current) => ({
@@ -275,32 +303,34 @@ function App() {
                 title,
                 author,
                 category,
+                shelf,
                 coverImage,
                 pdfPath,
                 totalPages,
                 currentPage,
-                target,
+                target: resolvedTarget,
                 updatedAt: now,
-                finishedAt: currentPage >= totalPages ? book.finishedAt ?? now : null,
+                finishedAt: shelf === "active" && currentPage >= totalPages ? book.finishedAt ?? now : null,
               }
             : book,
         ),
       }));
-      setMilestone("Book updated");
+      setMilestone(shelf === "readingList" ? "Book moved to reading list" : "Book updated");
     } else {
       const book: Book = {
         id: createId(),
         title,
         author,
         category,
+        shelf,
         coverImage,
         pdfPath,
         totalPages,
         currentPage,
-        target,
+        target: resolvedTarget,
         addedAt: now,
         updatedAt: now,
-        finishedAt: currentPage >= totalPages ? now : null,
+        finishedAt: shelf === "active" && currentPage >= totalPages ? now : null,
       };
 
       setLibrary((current) => ({
@@ -308,7 +338,7 @@ function App() {
         books: [book, ...current.books],
       }));
       setSelectedBookId(book.id);
-      setMilestone("Book added");
+      setMilestone(shelf === "readingList" ? "Book added to reading list" : "Book added");
     }
 
     setEditingBookId(null);
@@ -331,6 +361,58 @@ function App() {
     setIsBookPanelOpen(true);
   }
 
+  function beginStartReading(book: Book) {
+    setSelectedBookId(book.id);
+    setStartForm(startReadingFormFromBook(book));
+    setStartError("");
+    setIsStartPanelOpen(true);
+  }
+
+  function cancelStartReading() {
+    setIsStartPanelOpen(false);
+    setStartForm(defaultStartReadingForm());
+    setStartError("");
+  }
+
+  function handleStartReadingSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!selectedBook || !isReadingListBook(selectedBook)) {
+      setStartError("Choose a book from the reading list first.");
+      return;
+    }
+
+    const target = targetFromForm(startForm);
+    if (!target) {
+      setStartError("Set a valid reading target.");
+      return;
+    }
+
+    const currentPage = clampPage(Math.round(Number(startForm.currentPage) || 0), selectedBook.totalPages);
+    const now = isoNow();
+
+    setLibrary((current) => ({
+      ...current,
+      books: current.books.map((book) =>
+        book.id === selectedBook.id
+          ? {
+              ...book,
+              shelf: "active",
+              currentPage,
+              target,
+              updatedAt: now,
+              finishedAt: currentPage >= book.totalPages ? now : null,
+            }
+          : book,
+      ),
+    }));
+    setCategoryFilter("All");
+    setIsStartPanelOpen(false);
+    setStartForm(defaultStartReadingForm());
+    setStartError("");
+    setMilestone(`Started ${selectedBook.title}`);
+  }
+
   function cancelEdit() {
     setEditingBookId(null);
     setIsBookPanelOpen(false);
@@ -343,6 +425,11 @@ function App() {
 
     if (!selectedBook) {
       setProgressError("Choose a book first.");
+      return;
+    }
+
+    if (!isActiveBook(selectedBook)) {
+      setProgressError("Start this book before logging pages.");
       return;
     }
 
@@ -483,7 +570,6 @@ function App() {
         {page === "home" ? (
           <HomePage
             activeBooks={activeBooks}
-            books={sortedBooks}
             library={library}
             stats={stats}
             onLogPages={beginLogPages}
@@ -510,6 +596,7 @@ function App() {
             onBack={() => setPage("library")}
             onEdit={beginEdit}
             onOpenPdf={openPdfInOkular}
+            onStartReading={beginStartReading}
           />
         ) : null}
 
@@ -534,12 +621,25 @@ function App() {
               activeBooks={activeBooks}
               progressError={progressError}
               progressPage={progressPage}
-              selectedBook={selectedBook}
+              selectedBook={selectedActiveBook}
               selectedBookId={selectedBookId}
               sessions={library.sessions}
               onLogProgress={logProgress}
               onProgressPageChange={setProgressPage}
               onSelectedBookChange={setSelectedBookId}
+            />
+          </SidePanel>
+        ) : null}
+
+        {isStartPanelOpen ? (
+          <SidePanel onClose={cancelStartReading}>
+            <StartReadingForm
+              book={selectedBook}
+              form={startForm}
+              formError={startError}
+              onCancel={cancelStartReading}
+              onSubmit={handleStartReadingSubmit}
+              onUpdate={updateStartForm}
             />
           </SidePanel>
         ) : null}
@@ -556,14 +656,12 @@ function App() {
 
 function HomePage({
   activeBooks,
-  books,
   library,
   stats,
   onLogPages,
   onOpenBook,
 }: {
   activeBooks: Book[];
-  books: Book[];
   library: LibraryData;
   stats: ReturnType<typeof libraryStats>;
   onLogPages: (bookId?: string) => void;
@@ -638,7 +736,7 @@ function HomePage({
             </div>
             <p className="text-sm text-faded">{activeBooks.length} active</p>
           </div>
-          <RecentBooks books={books.slice(0, 6)} onOpenBook={onOpenBook} />
+          <RecentBooks books={activeBooks.slice(0, 6)} onOpenBook={onOpenBook} />
         </section>
       </section>
 
@@ -762,12 +860,21 @@ function LibraryPage({
   onOpenBook: (bookId: string) => void;
 }) {
   const isArchive = categoryFilter === "Archive";
+  const isReadingList = categoryFilter === "Reading list";
   const shelfBooks = books.filter((book) => {
     if (isArchive) {
       return Boolean(book.finishedAt);
     }
 
+    if (isReadingList) {
+      return isReadingListBook(book);
+    }
+
     if (book.finishedAt) {
+      return false;
+    }
+
+    if (isReadingListBook(book)) {
       return false;
     }
 
@@ -795,20 +902,25 @@ function LibraryPage({
 
           <CategoryChips
             activeCategory={categoryFilter}
-            categories={["All", "Archive", ...categories]}
+            categories={["All", "Reading list", "Archive", ...categories]}
             onChange={onCategoryFilterChange}
           />
         </div>
 
         {shelfBooks.length === 0 ? (
           <div className="rounded-md border border-dashed border-white/15 bg-slate/60 p-8 text-center text-faded">
-            {isArchive ? "No finished books yet." : "No books match this shelf."}
+            {isArchive
+              ? "No finished books yet."
+              : isReadingList
+                ? "No books are waiting in the reading list."
+                : "No books match this shelf."}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
             {shelfBooks.map((book) => (
               <SquareBookCard
                 archived={isArchive}
+                readingList={isReadingList}
                 key={book.id}
                 book={book}
                 sessions={sessions}
@@ -828,18 +940,32 @@ function BookDetailPage({
   onBack,
   onEdit,
   onOpenPdf,
+  onStartReading,
 }: {
   book: Book | undefined;
   sessions: ReadingSession[];
   onBack: () => void;
   onEdit: (book: Book) => void;
   onOpenPdf: (book: Book) => void;
+  onStartReading: (book: Book) => void;
 }) {
   if (!book) {
     return (
       <section className="rounded-md border border-white/10 bg-night p-8 text-center text-faded">
         Choose a book from the Library.
       </section>
+    );
+  }
+
+  if (isReadingListBook(book)) {
+    return (
+      <ReadingListBookDetail
+        book={book}
+        onBack={onBack}
+        onEdit={onEdit}
+        onOpenPdf={onOpenPdf}
+        onStartReading={onStartReading}
+      />
     );
   }
 
@@ -962,6 +1088,100 @@ function BookDetailPage({
           </div>
           <Heatmap compact range={90} sessions={bookSessions} streak={analytics.currentBookStreak} />
         </div>
+      </section>
+    </div>
+  );
+}
+
+function ReadingListBookDetail({
+  book,
+  onBack,
+  onEdit,
+  onOpenPdf,
+  onStartReading,
+}: {
+  book: Book;
+  onBack: () => void;
+  onEdit: (book: Book) => void;
+  onOpenPdf: (book: Book) => void;
+  onStartReading: (book: Book) => void;
+}) {
+  const cover = resolveCoverSource(book.coverImage);
+
+  return (
+    <div className="grid gap-4">
+      <section className="grid gap-4 rounded-md border border-white/10 bg-night p-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid gap-4 rounded-md border border-white/10 bg-slate p-4 sm:grid-cols-[148px_minmax(0,1fr)]">
+          <div className="book-detail-cover grid aspect-square place-items-center overflow-hidden rounded-md bg-charcoal">
+            {cover ? (
+              <BookArtwork alt={`${book.title} cover`} cover={cover} size="large" />
+            ) : (
+              <div className="p-4 text-center">
+                <h2 className="fit-title font-display text-parchment">{book.title}</h2>
+                <p className="mt-2 text-sm text-faded">{book.author}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="grid min-w-0 content-between gap-5">
+            <div className="min-w-0">
+              <button className="mb-3 text-sm text-faded transition hover:text-brass" onClick={onBack} type="button">
+                Back to library
+              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded border border-brass/40 px-2 py-1 text-xs uppercase text-brass">
+                  Reading list
+                </span>
+                <span className="rounded border border-white/10 px-2 py-1 text-xs uppercase text-faded">
+                  {book.category}
+                </span>
+              </div>
+              <h2 className="mt-3 font-display text-4xl leading-tight text-parchment">{book.title}</h2>
+              <p className="mt-1 text-faded">{book.author}</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                className="h-10 rounded-md bg-brass px-4 text-sm font-semibold text-charcoal transition hover:bg-[#d6b66d]"
+                onClick={() => onStartReading(book)}
+                type="button"
+              >
+                Start reading
+              </button>
+              <button
+                className="h-10 rounded-md border border-white/10 px-4 text-sm text-parchment transition hover:border-brass hover:text-brass"
+                onClick={() => onEdit(book)}
+                type="button"
+              >
+                Edit book
+              </button>
+              {book.pdfPath ? (
+                <button
+                  className="text-xs text-faded underline-offset-4 transition hover:text-brass hover:underline"
+                  onClick={() => onOpenPdf(book)}
+                  type="button"
+                >
+                  open in Okular
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <aside className="grid content-start gap-3 rounded-md border border-white/10 bg-slate p-4">
+          <Metric label="Status" value="Waiting to start" />
+          <Metric label="Pages" value={`${book.totalPages}`} />
+          <Metric label="Added" value={displayDate(book.addedAt)} />
+          <Metric label="PDF" value={book.pdfPath ? "Attached" : "None"} />
+        </aside>
+      </section>
+
+      <section className="rounded-md border border-white/10 bg-night p-5">
+        <p className="text-sm uppercase text-faded">Next step</p>
+        <h3 className="mt-1 font-display text-3xl text-parchment">Set a target when you are ready</h3>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-faded">
+          Reading-list books stay out of daily tasks and progress logging until you start them.
+        </p>
       </section>
     </div>
   );
@@ -1119,6 +1339,29 @@ function BookForm({
             ))}
           </div>
         ) : null}
+        <div className="grid gap-2">
+          <p className="text-sm text-faded">Shelf</p>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              ["active", "Currently reading", "Track goals and pages now"],
+              ["readingList", "Reading list", "Save it for later"],
+            ] as Array<[BookShelf, string, string]>).map(([shelf, label, help]) => (
+              <button
+                key={shelf}
+                className={`rounded-md border px-3 py-3 text-left transition ${
+                  form.shelf === shelf
+                    ? "border-brass bg-brass/10 text-parchment"
+                    : "border-white/10 bg-slate text-faded hover:border-brass hover:text-parchment"
+                }`}
+                onClick={() => onUpdate("shelf", shelf)}
+                type="button"
+              >
+                <span className="block text-sm font-semibold">{label}</span>
+                <span className="mt-1 block text-xs">{help}</span>
+              </button>
+            ))}
+          </div>
+        </div>
         <TextField
           label="Cover URL or local path"
           value={form.coverImage}
@@ -1146,7 +1389,7 @@ function BookForm({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className={form.shelf === "active" ? "grid grid-cols-2 gap-3" : "grid gap-3"}>
           <TextField
             label="Total pages"
             min={1}
@@ -1154,14 +1397,123 @@ function BookForm({
             value={form.totalPages}
             onChange={(value) => onUpdate("totalPages", value)}
           />
-          <TextField
-            label="Current page"
-            min={0}
-            type="number"
-            value={form.currentPage}
-            onChange={(value) => onUpdate("currentPage", value)}
-          />
+          {form.shelf === "active" ? (
+            <TextField
+              label="Current page"
+              min={0}
+              type="number"
+              value={form.currentPage}
+              onChange={(value) => onUpdate("currentPage", value)}
+            />
+          ) : null}
         </div>
+
+        {form.shelf === "active" ? (
+          <>
+            <div className="grid gap-2">
+              <p className="text-sm text-faded">Target type</p>
+              <div className="grid grid-cols-2 gap-2">
+                {targetOptions.map((option) => (
+                  <button
+                    key={option.kind}
+                    className={`rounded-md border px-3 py-3 text-left transition ${
+                      form.targetKind === option.kind
+                        ? "border-brass bg-brass/10 text-parchment"
+                        : "border-white/10 bg-slate text-faded hover:border-brass hover:text-parchment"
+                    }`}
+                    onClick={() => onUpdate("targetKind", option.kind)}
+                    type="button"
+                  >
+                    <span className="block text-sm font-semibold">{option.label}</span>
+                    <span className="mt-1 block text-xs">{option.help}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {form.targetKind === "deadline" ? (
+              <TextField
+                label="Finish by"
+                type="date"
+                value={form.finishBy}
+                onChange={(value) => onUpdate("finishBy", value)}
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <TextField
+                  label="Pages"
+                  min={1}
+                  type="number"
+                  value={form.pages}
+                  onChange={(value) => onUpdate("pages", value)}
+                />
+                {form.targetKind === "pagesEveryDays" ? (
+                  <TextField
+                    label="Every days"
+                    min={1}
+                    type="number"
+                    value={form.days}
+                    onChange={(value) => onUpdate("days", value)}
+                  />
+                ) : null}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="rounded-md border border-dashed border-white/15 bg-slate/50 p-3 text-sm leading-6 text-faded">
+            Reading-list books stay out of goals until you open the book and press Start reading.
+          </p>
+        )}
+
+        {formError ? <p className="text-sm text-brass">{formError}</p> : null}
+
+        <button
+          className="h-11 rounded-md bg-brass px-5 text-sm font-semibold text-charcoal transition hover:bg-[#d6b66d]"
+          type="submit"
+        >
+          {editingBookId ? "Save book" : form.shelf === "readingList" ? "Add to reading list" : "Add book"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function StartReadingForm({
+  book,
+  form,
+  formError,
+  onCancel,
+  onSubmit,
+  onUpdate,
+}: {
+  book: Book | undefined;
+  form: StartReadingFormState;
+  formError: string;
+  onCancel: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onUpdate: (field: keyof StartReadingFormState, value: string) => void;
+}) {
+  return (
+    <section className="rounded-md border border-white/10 bg-night p-5 shadow-2xl shadow-black/20">
+      <div className="mb-5 flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm uppercase text-faded">Reading list</p>
+          <h2 className="mt-1 font-display text-3xl text-parchment">Start reading</h2>
+          {book ? <p className="mt-2 truncate text-sm text-faded">{book.title}</p> : null}
+        </div>
+        <button className="text-sm text-faded transition hover:text-parchment" onClick={onCancel} type="button">
+          Cancel
+        </button>
+      </div>
+
+      <form className="grid gap-4" onSubmit={onSubmit}>
+        <TextField
+          label="Current page"
+          min={0}
+          type="number"
+          value={form.currentPage}
+          onChange={(value) => onUpdate("currentPage", value)}
+        />
 
         <div className="grid gap-2">
           <p className="text-sm text-faded">Target type</p>
@@ -1218,7 +1570,7 @@ function BookForm({
           className="h-11 rounded-md bg-brass px-5 text-sm font-semibold text-charcoal transition hover:bg-[#d6b66d]"
           type="submit"
         >
-          {editingBookId ? "Save book" : "Add book"}
+          Move to currently reading
         </button>
       </form>
     </section>
@@ -1227,22 +1579,27 @@ function BookForm({
 
 function SquareBookCard({
   archived = false,
+  readingList = false,
   book,
   sessions,
   onOpen,
 }: {
   archived?: boolean;
+  readingList?: boolean;
   book: Book;
   sessions: ReadingSession[];
   onOpen: (bookId: string) => void;
 }) {
   const cover = resolveCoverSource(book.coverImage);
-  const progress = bookProgress(book);
-  const target = targetWindow(book, sessions);
+  const isQueued = readingList || isReadingListBook(book);
+  const progress = isQueued ? 0 : bookProgress(book);
+  const target = isQueued ? null : targetWindow(book, sessions);
   const isFinished = Boolean(book.finishedAt);
 
   const meta = archived
     ? `Added ${displayDate(book.addedAt)} · Finished ${displayDate(book.finishedAt)}`
+    : isQueued
+      ? "Waiting to start"
     : book.author;
 
   return (
@@ -1267,14 +1624,16 @@ function SquareBookCard({
           </div>
           <div className="text-right">
             <p className="max-w-24 truncate text-[11px] uppercase text-brass">{book.category}</p>
-            <p className="mt-1 text-xs text-parchment">{Math.round(progress * 100)}%</p>
+            <p className="mt-1 text-xs text-parchment">{isQueued ? "queued" : `${Math.round(progress * 100)}%`}</p>
           </div>
         </div>
       </button>
       <div className="absolute inset-x-0 bottom-0 h-1 bg-charcoal">
         <div className="h-full bg-brass" style={{ width: `${progress * 100}%` }} />
       </div>
-      {(isFinished || target.progress >= 1) && <div className="absolute inset-0 ring-1 ring-inset ring-brass/70" />}
+      {!isQueued && (isFinished || (target && target.progress >= 1)) ? (
+        <div className="absolute inset-0 ring-1 ring-inset ring-brass/70" />
+      ) : null}
     </article>
   );
 }
@@ -1857,7 +2216,7 @@ function positiveInteger(value: string): number {
   return Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : 0;
 }
 
-function targetFromForm(form: BookFormState): ReadingTarget | null {
+function targetFromForm(form: TargetFormState): ReadingTarget | null {
   const pages = positiveInteger(form.pages);
 
   if (form.targetKind === "deadline") {
@@ -1878,6 +2237,36 @@ function targetFromForm(form: BookFormState): ReadingTarget | null {
   }
 
   return { kind: "pagesPerDay", pages };
+}
+
+function defaultReadingTarget(): ReadingTarget {
+  return { kind: "pagesPerDay", pages: 25 };
+}
+
+function startReadingFormFromBook(book: Book): StartReadingFormState {
+  const base = defaultStartReadingForm();
+
+  switch (book.target.kind) {
+    case "pagesPerDay":
+      base.pages = String(book.target.pages);
+      break;
+    case "pagesEveryDays":
+      base.pages = String(book.target.pages);
+      base.days = String(book.target.days);
+      break;
+    case "pagesPerWeek":
+      base.pages = String(book.target.pages);
+      break;
+    case "deadline":
+      base.finishBy = book.target.finishBy;
+      break;
+  }
+
+  return {
+    ...base,
+    currentPage: String(book.currentPage),
+    targetKind: book.target.kind,
+  };
 }
 
 function formFromBook(book: Book): BookFormState {
@@ -1904,6 +2293,7 @@ function formFromBook(book: Book): BookFormState {
     title: book.title,
     author: book.author,
     category: book.category,
+    shelf: book.shelf,
     coverImage: book.coverImage ?? "",
     pdfPath: book.pdfPath ?? "",
     totalPages: String(book.totalPages),
@@ -1913,11 +2303,26 @@ function formFromBook(book: Book): BookFormState {
 }
 
 function normalizeBook(book: Book): Book {
+  const shelf = book.finishedAt ? "active" : normalizeShelf(book.shelf);
+
   return {
     ...book,
     category: normalizeCategory(book.category),
+    shelf,
     pdfPath: book.pdfPath ?? null,
   };
+}
+
+function normalizeShelf(value: BookShelf | undefined): BookShelf {
+  return value === "readingList" ? "readingList" : "active";
+}
+
+function isReadingListBook(book: Book): boolean {
+  return !book.finishedAt && book.shelf === "readingList";
+}
+
+function isActiveBook(book: Book): boolean {
+  return !book.finishedAt && book.shelf !== "readingList";
 }
 
 function normalizeCategory(value: string | undefined): string {

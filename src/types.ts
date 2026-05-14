@@ -4,11 +4,14 @@ export type ReadingTarget =
   | { kind: "pagesPerWeek"; pages: number }
   | { kind: "deadline"; finishBy: string };
 
+export type BookShelf = "active" | "readingList";
+
 export type Book = {
   id: string;
   title: string;
   author: string;
   category: string;
+  shelf: BookShelf;
   coverImage: string | null;
   pdfPath: string | null;
   totalPages: number;

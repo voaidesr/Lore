@@ -4,8 +4,9 @@ Lore is a minimalist dark academia desktop app for tracking reading progress, go
 
 ## Features
 
-- Library shelf with square book cards, cover support, categories, filters, and archive view.
+- Library shelves with square book cards, cover support, categories, filters, reading list, and archive view.
 - Per-book targets: pages per day, pages every N days, pages per week, or finish-by date.
+- Reading-list workflow: save books for later, then start them by choosing a target and moving them into currently reading.
 - Fast progress logging that records sessions and recalculates the current page.
 - Dashboard for pages read, streaks, pending tasks, recent books, and reading evolution.
 - GitHub-style heatmaps and target grids for consistency and goal completion.
