@@ -199,7 +199,7 @@ export function libraryStats(data: LibraryData): {
   const today = todayKey();
 
   return {
-    activeBooks: data.books.filter((book) => !book.finishedAt).length,
+    activeBooks: data.books.filter((book) => !book.finishedAt && book.shelf !== "readingList").length,
     finishedBooks: data.books.filter((book) => book.finishedAt).length,
     pagesToday: pagesForDate(data.sessions, today),
     streak: currentStreak(data.sessions, today),

@@ -17,6 +17,8 @@ struct Book {
     author: String,
     #[serde(default = "default_category")]
     category: String,
+    #[serde(default)]
+    shelf: BookShelf,
     cover_image: Option<String>,
     #[serde(default)]
     pdf_path: Option<String>,
@@ -30,6 +32,14 @@ struct Book {
 
 fn default_category() -> String {
     "Unsorted".to_string()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum BookShelf {
+    #[default]
+    Active,
+    ReadingList,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
