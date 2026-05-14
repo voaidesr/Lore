@@ -7,19 +7,44 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies
 node_modules
+
+# Frontend build output
 dist
 dist-ssr
+.vite
+
+# Tauri/Rust build output
 src-tauri/target
+target
+src-tauri/gen/schemas
+
+# Local release artifacts
+release
+*.rpm
+*.deb
+*.AppImage
+*.tar.gz
+*.sha256
+SHA256SUMS
+
+# Local env/config
 *.local
 .env
 .env.*
+
+# Crash dumps
+core
+core.*
+src-tauri/core.*
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
